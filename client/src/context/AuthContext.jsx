@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback } from 'react'
 import api from '../lib/api'
+import { Capacitor } from '@capacitor/core'
 import { unregisterWebPushToken, requestWebPushPermission } from '../lib/firebase'
 
 const AuthContext = createContext(null)
@@ -14,7 +15,12 @@ export function AuthProvider({ children }) {
     const stored = localStorage.getItem('smdl_user')
     if (token && stored) {
       try {
-        setUser(JSON.parse(stored))
+        const parsed = JSON.parse(stored)
+        setUser(parsed)
+        // Auto-register push notifications on native Android or granted web browser
+        if (Capacitor.isNativePlatform() || (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted')) {
+          requestWebPushPermission().catch(() => {})
+        }
       } catch {
         localStorage.removeItem('smdl_user')
       }
@@ -50,8 +56,8 @@ export function AuthProvider({ children }) {
     if (userData?.id) localStorage.setItem('smdl_user', JSON.stringify(userData))
     setUser(userData)
 
-    // Re-sync push device token if browser notification permission was granted
-    if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted') {
+    // Auto-sync push device token on native Android or if browser notification permission was granted
+    if (Capacitor.isNativePlatform() || (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted')) {
       requestWebPushPermission().catch(() => {})
     }
 

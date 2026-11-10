@@ -1,4 +1,5 @@
 const path = require('path');
+const fs = require('fs');
 const admin = require('firebase-admin');
 const { getMessaging } = require('firebase-admin/messaging');
 const { supabaseAdmin } = require('../config/db');
@@ -38,6 +39,26 @@ function initFirebaseAdmin() {
       isFirebaseInitialized = true;
       console.log('🔥 [fcmService] Firebase Admin initialized successfully via Service Account JSON.');
       return true;
+    }
+
+    // Auto-discover serviceAccountKey.json in server root or config folder
+    const candidatePaths = [
+      path.resolve(__dirname, '../../serviceAccountKey.json'),
+      path.resolve(__dirname, '../../firebase-service-account.json'),
+      path.resolve(__dirname, '../config/serviceAccountKey.json'),
+    ];
+    for (const p of candidatePaths) {
+      if (fs.existsSync(p)) {
+        try {
+          const credentials = require(p);
+          admin.initializeApp({
+            credential: getCert(credentials),
+          });
+          isFirebaseInitialized = true;
+          console.log(`🔥 [fcmService] Firebase Admin initialized via discovered key file: ${p}`);
+          return true;
+        } catch (_err) {}
+      }
     }
 
     if (projectId && clientEmail && privateKey) {
@@ -96,6 +117,12 @@ async function sendMulticastPush(devices, { title, body, data = {}, notification
   cleanData.notificationType = String(notificationType || 'SYSTEM');
   cleanData.sentAt = new Date().toISOString();
 
+  // Ensure direct deep link URL is always present under multiple standard keys for Android receivers
+  const targetRoute = cleanData.actionUrl || cleanData.url || '/';
+  cleanData.actionUrl = targetRoute;
+  cleanData.url = targetRoute;
+  cleanData.targetUrl = targetRoute;
+
   // Unified payload structure: Works for both Web and Android
   const multicastMessage = {
     tokens: activeTokens,
@@ -118,9 +145,13 @@ async function sendMulticastPush(devices, { title, body, data = {}, notification
     android: {
       priority: 'high',
       notification: {
+        title,
+        body,
         channelId: 'smdl_alerts',
         sound: 'default',
-        clickAction: 'FLUTTER_NOTIFICATION_CLICK',
+        priority: 'high',
+        notificationPriority: 'PRIORITY_HIGH',
+        visibility: 'PUBLIC',
       },
     },
   };

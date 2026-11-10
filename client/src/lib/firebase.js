@@ -66,9 +66,69 @@ async function getFirebaseMessaging() {
 
 import { Capacitor } from '@capacitor/core'
 import { PushNotifications } from '@capacitor/push-notifications'
+import { getNotificationUrl } from './notificationRouter'
 
 // Guard to prevent repeated taps from triggering overlapping registration attempts
 let isPushRegistering = false
+let isNativeListenersSetup = false
+let globalNotificationClickHandler = null
+
+export function setNotificationClickHandler(fn) {
+  globalNotificationClickHandler = fn
+}
+
+/**
+ * Sets up global native push notification event listeners on Android/iOS
+ */
+export function setupNativePushListeners(onNotificationClick) {
+  if (typeof onNotificationClick === 'function') {
+    globalNotificationClickHandler = onNotificationClick
+  }
+
+  if (!Capacitor.isNativePlatform() || isNativeListenersSetup) return
+  isNativeListenersSetup = true
+
+  try {
+    PushNotifications.addListener('pushNotificationReceived', (notification) => {
+      console.log('📱 [Capacitor Push] Notification received in foreground:', notification)
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('app:notification-received', { detail: notification }))
+      }
+    }).catch(() => {})
+
+    PushNotifications.addListener('pushNotificationActionPerformed', (action) => {
+      console.log('📱 [Capacitor Push] Notification action tapped:', action)
+      const data = action.notification?.data || {}
+
+      let userRole = 'student'
+      try {
+        const stored = localStorage.getItem('smdl_user')
+        if (stored) {
+          const u = JSON.parse(stored)
+          if (u?.role) userRole = u.role
+        }
+      } catch (_e) {}
+
+      const targetUrl = getNotificationUrl(data, userRole)
+      console.log('🎯 [Capacitor Push] Direct deep link target:', targetUrl)
+
+      // 1. Invoke active router callback if registered
+      if (typeof globalNotificationClickHandler === 'function') {
+        globalNotificationClickHandler(targetUrl, data)
+      }
+
+      // 2. Broadcast custom navigation event for React Router
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('app:notification-nav', { detail: { url: targetUrl, data } }))
+        try {
+          sessionStorage.setItem('smdl_pending_redirect', targetUrl)
+        } catch (_e) {}
+      }
+    }).catch(() => {})
+  } catch (err) {
+    console.warn('[firebase.js] Native listener setup error:', err.message)
+  }
+}
 
 /**
  * Requests notification permission, retrieves FCM token,
@@ -77,6 +137,7 @@ let isPushRegistering = false
 export async function requestWebPushPermission() {
   // --- NATIVE ANDROID FCM WORKFLOW (Capacitor) ---
   if (Capacitor.isNativePlatform()) {
+    setupNativePushListeners()
     if (isPushRegistering) {
       return { supported: true, granted: false, reason: 'Push notification registration already in progress' }
     }
